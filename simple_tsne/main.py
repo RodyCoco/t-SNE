@@ -5,7 +5,8 @@ Using t-SNE. Journal of Machine Learning Research 9:2579-2605, 2008.
 
 import numpy as np
 from tqdm import tqdm
-
+import cv2
+import matplotlib.pyplot as plt
 EPSILON = 1e-12
 
 
@@ -40,7 +41,7 @@ def pairwise_affinities(data, sigmas, dist_mat):
     assert sigmas.shape == (data.shape[0], 1)
     inner = (-dist_mat) / (2 * (sigmas ** 2))
     numers = np.exp(inner)
-    denoms = np.sum(numers, axis=1) - np.diag(numers)
+    denoms = np.sum(numers, axis=1) - np.diag(numers) #不採計自己的距離
     denoms = denoms.reshape(-1, 1)
     denoms += EPSILON  # Avoid div/0
     P = numers / denoms
@@ -104,13 +105,9 @@ def all_sym_affinities(data, perp, tol, attempts=100):
         P = pairwise_affinities(data, sigmas.reshape(-1, 1), dist_mat)
         current_perps = get_perplexities(P)
         attempts -= 1
-        for i in range(len(current_perps)):
-            current_perp = current_perps[i]
-            if current_perp > perp:
-                sigma_maxs[i] = sigmas[i]
-            elif current_perp < perp:
-                sigma_mins[i] = sigmas[i]
-
+        sigma_maxs = np.where(current_perps>perp, sigmas, sigma_maxs)
+        sigma_mins = np.where(current_perps<perp, sigmas, sigma_mins)
+        
     if attempts == 0:
         print(
             "Warning: Ran out attempts before converging, try a different perplexity?"
@@ -174,6 +171,7 @@ def momentum_func(t):
 
 def tsne(
     data,
+    data_label,
     n_components,
     perp,
     n_iter,
@@ -216,17 +214,32 @@ def tsne(
     iter_range = range(n_iter)
     if pbar:
         iter_range = tqdm(iter_range, "Iterations")
+    videowrite = cv2.VideoWriter('test.mp4',cv2.VideoWriter_fourcc(*'mp4v'),20,(640,480))
+    from torch.utils.tensorboard import SummaryWriter
+    from datetime import datetime
+    cur_time = str(datetime.now())[:-7]
+    writer = SummaryWriter(log_dir=cur_time)
     for t in iter_range:
         Y_dist_mat = squared_dist_mat(Y)
         Q = low_dim_affinities(Y, Y_dist_mat)
         Q = np.clip(Q, EPSILON, None)
-        grad = compute_grad(P, Q, Y, Y_dist_mat)
+        import torch
+
+        loss_pointwise = P * (np.log(P) - np.log(Q))
+        writer.add_scalar("Loss", np.sum(loss_pointwise), t + 1)
+        grad = compute_grad(P, Q, Y, Y_dist_mat)*((0.99)**t)
         Y = Y - lr * grad + momentum_fn(t) * (Y - Y_old)
-        Y_old = Y.copy()
         Y_old = Y.copy()
         if t == 100:
             P = P / early_exaggeration
-            pass
-        pass
-
+        
+        plt.figure()
+        plt.xlim(-3, 3)
+        plt.ylim(-3, 3)
+        plt.scatter(Y[:,0], Y[:,1], c=data_label)
+        plt.savefig("t.png")
+        img = cv2.imread("t.png")
+        videowrite.write(img)
+        plt.close()
+        
     return Y
