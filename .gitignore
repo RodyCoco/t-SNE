@@ -1,6 +1,8 @@
 .ipynb_checkpoints
 notebooks/.ipynb_checkpoints
 simple_tsne/__pycache__
+logs/*
+*.png
 
 # Packaging
 simple_tsne.egg-info

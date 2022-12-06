@@ -7,6 +7,8 @@ import numpy as np
 from tqdm import tqdm
 import cv2
 import matplotlib.pyplot as plt
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
 EPSILON = 1e-12
 
 
@@ -215,10 +217,8 @@ def tsne(
     if pbar:
         iter_range = tqdm(iter_range, "Iterations")
     videowrite = cv2.VideoWriter('test.mp4',cv2.VideoWriter_fourcc(*'mp4v'),20,(640,480))
-    from torch.utils.tensorboard import SummaryWriter
-    from datetime import datetime
     cur_time = str(datetime.now())[:-7]
-    writer = SummaryWriter(log_dir=cur_time)
+    writer = SummaryWriter(log_dir="logs/"+cur_time)
     for t in iter_range:
         Y_dist_mat = squared_dist_mat(Y)
         Q = low_dim_affinities(Y, Y_dist_mat)
@@ -234,12 +234,112 @@ def tsne(
             P = P / early_exaggeration
         
         plt.figure()
-        plt.xlim(-3, 3)
-        plt.ylim(-3, 3)
-        plt.scatter(Y[:,0], Y[:,1], c=data_label)
+        plt.scatter(Y[:,0], Y[:,1], c=data_label, cmap=plt.get_cmap('gist_rainbow'))
+        plt.legend()
         plt.savefig("t.png")
         img = cv2.imread("t.png")
         videowrite.write(img)
         plt.close()
         
+    return Y
+
+def split_tsne(
+    data,
+    data_label,
+    n_components,
+    perp,
+    n_iter,
+    lr,
+    perp_tol=1e-8,
+    early_exaggeration=4.0,
+    pbar=False,
+    random_state=None,
+    split_num=1,
+    seed=0,
+    save_video=False,
+    exp_decay=1,
+):
+    """calculates the pairwise affinities p_{j|i} using the given values of sigma
+
+    Parameters:
+    data : ndarray of shape (n_samples, n_features)
+    n_components : int, target number of dimensions
+    perp : float, cost function parameter
+    n_iter : number of iterations to run, recommended to be no less than 250
+    lr : learning rate
+    momentum_fn : function that controls the momentum term
+    perp_tol : float, tolerance of how close the current perplexity is to the target perplexity
+    early_exaggeration : optimization parameter
+    pbar : flag to show tqdm progress bar during iterations
+    random_state : determines the random number generator, set for reproducible results
+
+
+    Returns:
+    Y: low dimensional representation of the data, ndarray of shape (n_samples, n_components)
+
+    """
+    np.random.seed(seed)
+    rand = np.random.RandomState(random_state)
+    
+    P = all_sym_affinities(data, perp, perp_tol) * early_exaggeration
+    P = np.clip(P, EPSILON, None)
+
+    init_mean = np.zeros(n_components)
+    init_cov = np.identity(n_components) * 1e-4
+
+    Y = rand.multivariate_normal(mean=init_mean, cov=init_cov, size=data.shape[0])
+
+    iter_range = range(n_iter)
+    if pbar:
+        iter_range = tqdm(iter_range, "Iterations")
+    if save_video:
+        videowrite = cv2.VideoWriter('results/result.mp4',cv2.VideoWriter_fourcc(*'mp4v'),20,(640,480))
+    
+    cur_time = str(datetime.now())[:-7]
+    writer = SummaryWriter(log_dir="logs/"+cur_time)
+    
+    data_size = data.shape[0]
+    split_data_size = int(np.ceil(data_size/split_num))
+    min_loss = np.inf
+    
+    for t in iter_range:
+        data_order = np.arange(data_size)
+        np.random.shuffle(data_order)
+        for i in range(split_num):
+            start_idx, end_idx = i*split_data_size, (i+1)*split_data_size
+            cur_Y = Y[data_order[start_idx:end_idx]]
+            cur_P = P[data_order[start_idx:end_idx]]
+            cur_P = cur_P[:, data_order[start_idx:end_idx]]
+
+            Y_dist_mat = squared_dist_mat(cur_Y)
+            Q = low_dim_affinities(cur_Y, Y_dist_mat)
+            Q = np.clip(Q, EPSILON, None)
+
+            grad = compute_grad(cur_P, Q, cur_Y, Y_dist_mat)*((exp_decay)**(t-500))
+            Y[data_order[start_idx:end_idx]] = cur_Y - lr * grad
+        
+        Y_dist_mat = squared_dist_mat(Y)
+        Q = low_dim_affinities(Y, Y_dist_mat)
+        Q = np.clip(Q, EPSILON, None)
+        loss = np.sum(P * (np.log(P) - np.log(Q)))
+        writer.add_scalar("Loss", loss, t + 1)
+        if loss < min_loss:
+            min_loss = loss
+        if t == 100:
+            P = P / early_exaggeration
+
+        if save_video:
+            fig, ax = plt.subplots()
+            scatter  = ax.scatter(Y[:,0], Y[:,1], c=data_label, cmap=plt.get_cmap('turbo'))
+            # Shrink current axis by 20%
+            box = ax.get_position()
+            ax.set_position([box.x0, box.y0, box.width * 0.95, box.height])
+            legend1 = ax.legend(*scatter.legend_elements(),
+                        loc="center left", title="Classes", bbox_to_anchor=(1, 0.5))
+            ax.add_artist(legend1)
+            plt.savefig("results/t.png")
+            img = cv2.imread("results/t.png")
+            videowrite.write(img)
+            plt.close()
+    print("min_loss:", min_loss)
     return Y
