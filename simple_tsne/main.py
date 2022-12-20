@@ -2,7 +2,7 @@
 implementation of van der Maaten, L.J.P.; Hinton, G.E. Visualizing High-Dimensional Data
 Using t-SNE. Journal of Machine Learning Research 9:2579-2605, 2008.
 """
-
+from sklearn.decomposition import PCA
 import numpy as np
 from tqdm import tqdm
 import cv2
@@ -223,7 +223,6 @@ def tsne(
         Y_dist_mat = squared_dist_mat(Y)
         Q = low_dim_affinities(Y, Y_dist_mat)
         Q = np.clip(Q, EPSILON, None)
-        import torch
 
         loss_pointwise = P * (np.log(P) - np.log(Q))
         writer.add_scalar("Loss", np.sum(loss_pointwise), t + 1)
@@ -258,6 +257,7 @@ def split_tsne(
     seed=0,
     save_video=False,
     exp_decay=1,
+    init=1,
 ):
     """calculates the pairwise affinities p_{j|i} using the given values of sigma
 
@@ -287,7 +287,13 @@ def split_tsne(
     init_mean = np.zeros(n_components)
     init_cov = np.identity(n_components) * 1e-4
 
-    Y = rand.multivariate_normal(mean=init_mean, cov=init_cov, size=data.shape[0])
+    if init == 1:
+        Y = rand.multivariate_normal(mean=init_mean, cov=init_cov, size=data.shape[0])
+    elif init == 2:
+        pca = PCA(n_components=n_components)
+        Y = pca.fit_transform(data)
+    else:
+        Y = None
 
     iter_range = range(n_iter)
     if pbar:

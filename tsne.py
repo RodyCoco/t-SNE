@@ -17,9 +17,9 @@ low_dim = split_tsne(
     # momentum_fn=momentum_func, # Function returning momentum coefficient, this one is the default update schedule
     pbar=True, # Show progress barv
     random_state=42, # Seed for random initialization
-    split_num=4,
-    # save_video = True
-    # exp_decay = 0.995
+    split_num=2,
+    init=1, # 1:高斯, 2:PCA
+    save_video = True
 )
 
 fig, ax = plt.subplots()
