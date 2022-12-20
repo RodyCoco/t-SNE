@@ -7,7 +7,7 @@ output_dim: Tuple(timestamp, features)
 '''
 class Network(nn.Module):
     
-    def __init__(self, input_dim, output_dim, hidden_dim = [60, 60, 60], p = 0):
+    def __init__(self, input_dim, output_dim, hidden_dim = [100, 60, 40]):
         super(Network, self).__init__()
         self.output_dim = output_dim
         self.linear1 = nn.Sequential(
@@ -30,7 +30,6 @@ class Network(nn.Module):
         self.residual_linear2 = nn.Linear(input_dim, hidden_dim[2])
         
     def forward(self, in_data):
-        
         hidden = self.linear1(in_data)
         hidden = self.linear2(hidden)
         hidden = self.linear3(hidden)
