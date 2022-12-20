@@ -2,16 +2,14 @@
 implementation of van der Maaten, L.J.P.; Hinton, G.E. Visualizing High-Dimensional Data
 Using t-SNE. Journal of Machine Learning Research 9:2579-2605, 2008.
 """
-
+from sklearn.decomposition import PCA
 import numpy as np
 from tqdm import tqdm
 import cv2
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
-import torch
 EPSILON = 1e-12
-gpu_number = 4
 
 
 def squared_dist_mat(X):
@@ -131,65 +129,39 @@ def low_dim_affinities(Y, Y_dist_mat):
     Q: Symmetric low dimensional affinities matrix of shape (n_samples, n_samples)
 
     """
-
-    numers = 1/(1 + Y_dist_mat) if torch.is_tensor(Y_dist_mat) else torch.tensor(1/(1 + Y_dist_mat)).cuda(gpu_number)
-    denom = torch.sum(numers) - torch.sum(torch.diag(numers))
+    numers = (1 + Y_dist_mat) ** (-1)
+    denom = np.sum(numers) - np.sum(np.diag(numers))
     denom += EPSILON  # Avoid div/0
     Q = numers / denom
-    B = torch.eye(Q.shape[0])
-    B = torch.where(B==1,0,1).cuda(gpu_number)
-    Q = Q*B
+    np.fill_diagonal(Q, 0.0)
     return Q
 
 
-def compute_grad(cur_P, cur_Y, model, prev_kl_div, optimizer):
-    torch.autograd.set_detect_anomaly(True)
-    origin_shape = cur_Y.shape
-    cur_Y = torch.tensor(cur_Y.reshape(1, 1, -1)).cuda(gpu_number)
-    action = model(cur_Y)
-    
-    action = action.reshape(origin_shape)
-    cur_Y = cur_Y.reshape(origin_shape)
-    cur_Y = action # cur_Y + action
-    
-    Y_dist_mat = torch.cdist(cur_Y, cur_Y, p=2).pow(2)
-    cur_Q = low_dim_affinities(cur_Y, Y_dist_mat)
-    cur_Q = torch.clip(cur_Q, EPSILON, None).cuda(gpu_number)
-    
-    # KL div
-    cur_P = torch.tensor(cur_P).cuda(gpu_number)
-    cur_kl_div = torch.sum(cur_P * (torch.log(cur_P) - torch.log(cur_Q)))
-    optimizer.zero_grad()
-    loss = cur_kl_div
-    loss.backward()
-    optimizer.step()
-    
-    return action
-
-
-def momentum_func(t):
-    """returns optimization parameter
-
+def compute_grad(P, Q, Y, Y_dist_mat):
+    """
+    computes the gradient vector needed to update the Y values
     Parameters:
-    t: integer, iteration number
+    P: Symmetric affinities matrix of shape (n_samples, n_samples)
+    Q: Symmetric low dimensional affinities matrix of shape (n_samples, n_samples)
+    Y : low dimensional representation of the data, ndarray of shape (n_samples, n_components)
+    Y_dist_mat : Y distance matrix; ndarray of shape (n_samples, n_samples)
 
     Returns:
-    float representing the momentum term added to the gradient
-    """
-    if t < 250:
-        return 0.5
-    else:
-        return 0.8
+    grad: the gradient vector, shape (n_samples, n_components)
 
-def rl_tsne(
-    model,
+    """
+    Ydiff = Y[:, np.newaxis, :] - Y[np.newaxis, :, :]
+    pq_factor = (P - Q)[:, :, np.newaxis]
+    dist_factor = ((1 + Y_dist_mat) ** (-1))[:, :, np.newaxis]
+    return np.sum(4 * pq_factor * Ydiff * dist_factor, axis=1)
+
+def split_tsne(
     data,
     data_label,
     n_components,
     perp,
     n_iter,
     lr,
-    after_lr,
     perp_tol=1e-8,
     early_exaggeration=4.0,
     pbar=False,
@@ -197,6 +169,7 @@ def rl_tsne(
     split_num=1,
     seed=0,
     save_video=False,
+    exp_decay=1,
 ):
     """calculates the pairwise affinities p_{j|i} using the given values of sigma
 
@@ -217,8 +190,6 @@ def rl_tsne(
     Y: low dimensional representation of the data, ndarray of shape (n_samples, n_components)
 
     """
-    model = model.cuda(gpu_number)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     np.random.seed(seed)
     rand = np.random.RandomState(random_state)
     
@@ -229,6 +200,8 @@ def rl_tsne(
     init_cov = np.identity(n_components) * 1e-4
 
     Y = rand.multivariate_normal(mean=init_mean, cov=init_cov, size=data.shape[0])
+    # pca = PCA(n_components=n_components)
+    # Y = pca.fit_transform(data)
 
     iter_range = range(n_iter)
     if pbar:
@@ -245,37 +218,33 @@ def rl_tsne(
     
     for t in iter_range:
         data_order = np.arange(data_size)
-        # np.random.shuffle(data_order)
+        np.random.shuffle(data_order)
         for i in range(split_num):
             start_idx, end_idx = i*split_data_size, (i+1)*split_data_size
             cur_Y = Y[data_order[start_idx:end_idx]]
             cur_P = P[data_order[start_idx:end_idx]]
             cur_P = cur_P[:, data_order[start_idx:end_idx]]
 
-            Y_dist_mat = squared_dist_mat(Y)
-            Q = low_dim_affinities(Y, Y_dist_mat)
-            Q = np.clip(Q.detach().cpu().numpy(), EPSILON, None)
-            prev_kl_div = np.sum(P * (np.log(P) - np.log(Q)))
-            
-            action = compute_grad(cur_P, cur_Y.copy(), model, prev_kl_div, optimizer)
-            Y[data_order[start_idx:end_idx]] = action.detach().cpu().numpy() # cur_Y + action.detach().cpu().numpy()
+            Y_dist_mat = squared_dist_mat(cur_Y)
+            Q = low_dim_affinities(cur_Y, Y_dist_mat)
+            Q = np.clip(Q, EPSILON, None)
+
+            grad = compute_grad(cur_P, Q, cur_Y, Y_dist_mat)*((exp_decay)**(t-500))
+            Y[data_order[start_idx:end_idx]] = cur_Y - lr * grad
         
         Y_dist_mat = squared_dist_mat(Y)
         Q = low_dim_affinities(Y, Y_dist_mat)
-        Q = np.clip(Q.detach().cpu().numpy(), EPSILON, None)
+        Q = np.clip(Q, EPSILON, None)
         loss = np.sum(P * (np.log(P) - np.log(Q)))
         writer.add_scalar("Loss", loss, t + 1)
         if loss < min_loss:
             min_loss = loss
         if t == 100:
             P = P / early_exaggeration
-            optimizer = torch.optim.Adam(model.parameters(), lr=after_lr)
 
         if save_video:
             fig, ax = plt.subplots()
-            plt.ylim(-2, 6)
-            plt.xlim(-3, 10)
-            scatter  = ax.scatter(Y[:,0], Y[:,1], c=data_label, )# cmap=plt.get_cmap('turbo'))
+            scatter  = ax.scatter(Y[:,0], Y[:,1], c=data_label, cmap=plt.get_cmap('turbo'))
             # Shrink current axis by 20%
             box = ax.get_position()
             ax.set_position([box.x0, box.y0, box.width * 0.95, box.height])
