@@ -9,6 +9,8 @@ import cv2
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
+from torch.distributions.multivariate_normal import MultivariateNormal
+import torch
 EPSILON = 1e-12
 
 
@@ -23,8 +25,8 @@ def squared_dist_mat(X):
     D: Squared eucledian distance matrix of shape (n_samples, n_samples)
 
     """
-    sum_X = np.sum(np.square(X), 1)
-    D = np.add(np.add(-2 * np.dot(X, X.T), sum_X).T, sum_X)
+    sum_X = torch.sum(torch.square(X), 1)
+    D = torch.transpose(-2 * torch.mm(X, torch.transpose(X,0,1)) + sum_X, 0, 1) + sum_X
     return D
 
 
@@ -40,14 +42,17 @@ def pairwise_affinities(data, sigmas, dist_mat):
     P: pairwise affinity matrix of size (n_samples, n_samples)
 
     """
+    
     assert sigmas.shape == (data.shape[0], 1)
+
     inner = (-dist_mat) / (2 * (sigmas ** 2))
-    numers = np.exp(inner)
-    denoms = np.sum(numers, axis=1) - np.diag(numers) #不採計自己的距離
+    numers = torch.exp(inner)
+    denoms = torch.sum(numers, dim=1) - torch.diag(numers) #不採計自己的距離
     denoms = denoms.reshape(-1, 1)
     denoms += EPSILON  # Avoid div/0
     P = numers / denoms
-    np.fill_diagonal(P, 0.0)
+    P = P.fill_diagonal_(0.0)   
+
     return P
 
 
@@ -61,10 +66,13 @@ def get_entropies(asym_affinities):
     Returns:
     array-like row-wise Shannon entropy of shape (n_samples,)
     """
-    asym_affinities = np.clip(
+    
+    asym_affinities = torch.clip(
         asym_affinities, EPSILON, None
     )  # Some are so small that log2 fails.
-    return -np.sum(asym_affinities * np.log2(asym_affinities), axis=1)
+    out = -torch.sum(asym_affinities * torch.log2(asym_affinities), dim=1)
+    
+    return out
 
 
 def get_perplexities(asym_affinities):
@@ -93,22 +101,24 @@ def all_sym_affinities(data, perp, tol, attempts=100):
     P: Symmetric affinities matrix of shape (n_samples, n_samples)
 
     """
+    perp = torch.tensor([perp], dtype=torch.float64)
+    
     dist_mat = squared_dist_mat(data)  # mxm
 
-    sigma_maxs = np.full(data.shape[0], 1e12)
+    sigma_maxs = torch.full((data.shape[0],), 1e12)
 
     # zero here causes div/0, /2sigma**2 in P calc
-    sigma_mins = np.full(data.shape[0], 1e-12)
+    sigma_mins = torch.full((data.shape[0],), 1e-12)
 
-    current_perps = np.full(data.shape[0], np.inf)
+    current_perps = torch.full((data.shape[0],), np.inf, dtype=torch.float64) 
 
-    while (not np.allclose(current_perps, perp, atol=tol)) and attempts > 0:
+    while (not torch.allclose(current_perps, perp, atol=tol)) and attempts > 0:
         sigmas = (sigma_mins + sigma_maxs) / 2
         P = pairwise_affinities(data, sigmas.reshape(-1, 1), dist_mat)
         current_perps = get_perplexities(P)
         attempts -= 1
-        sigma_maxs = np.where(current_perps>perp, sigmas, sigma_maxs)
-        sigma_mins = np.where(current_perps<perp, sigmas, sigma_mins)
+        sigma_maxs = torch.where(current_perps>perp, sigmas, sigma_maxs)
+        sigma_mins = torch.where(current_perps<perp, sigmas, sigma_mins)
         
     if attempts == 0:
         print(
@@ -130,10 +140,10 @@ def low_dim_affinities(Y, Y_dist_mat):
 
     """
     numers = (1 + Y_dist_mat) ** (-1)
-    denom = np.sum(numers) - np.sum(np.diag(numers))
+    denom = torch.sum(numers) - torch.sum(torch.diag(numers))
     denom += EPSILON  # Avoid div/0
     Q = numers / denom
-    np.fill_diagonal(Q, 0.0)
+    Q = Q.fill_diagonal_(0.0)
     return Q
 
 
@@ -150,12 +160,12 @@ def compute_grad(P, Q, Y, Y_dist_mat):
     grad: the gradient vector, shape (n_samples, n_components)
 
     """
-    Ydiff = Y[:, np.newaxis, :] - Y[np.newaxis, :, :]
-    pq_factor = (P - Q)[:, :, np.newaxis]
-    dist_factor = ((1 + Y_dist_mat) ** (-1))[:, :, np.newaxis]
-    return np.sum(4 * pq_factor * Ydiff * dist_factor, axis=1)
+    Ydiff = Y[:, None, :] - Y[None, :, :]
+    pq_factor = (P - Q)[:, :, None]
+    dist_factor = ((1 + Y_dist_mat) ** (-1))[:, :, None]
+    return torch.sum(4 * pq_factor * Ydiff * dist_factor, axis=1)
 
-def split_tsne(
+def rl_tsne(
     data,
     data_label,
     n_components,
@@ -191,18 +201,20 @@ def split_tsne(
 
     """
     np.random.seed(seed)
-    rand = np.random.RandomState(random_state)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     
+    data = torch.tensor(data)
     P = all_sym_affinities(data, perp, perp_tol) * early_exaggeration
-    P = np.clip(P, EPSILON, None)
+    P = torch.clip(P, EPSILON, None)
 
     init_mean = np.zeros(n_components)
     init_cov = np.identity(n_components) * 1e-4
 
-    Y = rand.multivariate_normal(mean=init_mean, cov=init_cov, size=data.shape[0])
-    # pca = PCA(n_components=n_components)
-    # Y = pca.fit_transform(data)
-
+    Y = np.random.multivariate_normal(mean=init_mean, cov=init_cov, size=data.shape[0])
+    Y = torch.tensor(Y)
+    
     iter_range = range(n_iter)
     if pbar:
         iter_range = tqdm(iter_range, "Iterations")
@@ -227,15 +239,15 @@ def split_tsne(
 
             Y_dist_mat = squared_dist_mat(cur_Y)
             Q = low_dim_affinities(cur_Y, Y_dist_mat)
-            Q = np.clip(Q, EPSILON, None)
+            Q = torch.clip(Q, EPSILON, None)
 
             grad = compute_grad(cur_P, Q, cur_Y, Y_dist_mat)*((exp_decay)**(t-500))
             Y[data_order[start_idx:end_idx]] = cur_Y - lr * grad
         
         Y_dist_mat = squared_dist_mat(Y)
         Q = low_dim_affinities(Y, Y_dist_mat)
-        Q = np.clip(Q, EPSILON, None)
-        loss = np.sum(P * (np.log(P) - np.log(Q)))
+        Q = torch.clip(Q, EPSILON, None)
+        loss = torch.sum(P * (torch.log(P) - torch.log(Q)))
         writer.add_scalar("Loss", loss, t + 1)
         if loss < min_loss:
             min_loss = loss

@@ -12,24 +12,24 @@ torch.cuda.manual_seed(seed)
 torch.cuda.manual_seed_all(seed)
 
 digits, digit_class = load_digits(return_X_y=True)
-digit_class = digit_class[:50]
-digits = digits[:50]
+digit_class = digit_class[:500]
+digits = digits[:500]
 
 n_components = 2
 model = Network(digits.shape[0]*n_components, digits.shape[0]*n_components)
 model.double()
 
 low_dim = rl_tsne(
-    model=model,
+    # model=model,
     data_label=digit_class,
     data=digits, # Data is mxn numpy array, each row a point
     n_components=n_components, # Number of dim to embed to
-    perp=5, # Perplexity (higher for more spread out data)
+    perp=30, # Perplexity (higher for more spread out data)
     n_iter=500, # Iterations to run t-SNE for
-    lr=1e-3, # Learning rate
+    lr=20, # Learning rate
     pbar=True, # Show progress barv
     random_state=42, # Seed for random initialization
-    split_num=1,
+    split_num=2,
     # save_video=True,
 )
 
