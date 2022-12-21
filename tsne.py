@@ -19,7 +19,7 @@ low_dim = split_tsne(
     random_state=42, # Seed for random initialization
     split_num=2,
     init=1, # 1:高斯, 2:PCA
-    save_video = True
+    # save_video = True
 )
 
 fig, ax = plt.subplots()
