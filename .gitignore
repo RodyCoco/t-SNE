@@ -5,6 +5,7 @@ __pycache__
 logs/*
 *.png
 *.mp4
+*.pkl
 
 # Packaging
 simple_tsne.egg-info
