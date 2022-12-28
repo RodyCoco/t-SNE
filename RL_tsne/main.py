@@ -11,8 +11,8 @@ from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 from torch.distributions.multivariate_normal import MultivariateNormal
 import torch
+from policy import DiagonalGaussianPolicy
 EPSILON = 1e-12
-
 
 def squared_dist_mat(X):
     """calculates the squared eucledian distance matrix
@@ -25,8 +25,7 @@ def squared_dist_mat(X):
     D: Squared eucledian distance matrix of shape (n_samples, n_samples)
 
     """
-    sum_X = torch.sum(torch.square(X), 1)
-    D = torch.transpose(-2 * torch.mm(X, torch.transpose(X,0,1)) + sum_X, 0, 1) + sum_X
+    D = torch.square(torch.cdist(X, X))
     return D
 
 
@@ -44,7 +43,6 @@ def pairwise_affinities(data, sigmas, dist_mat):
     """
     
     assert sigmas.shape == (data.shape[0], 1)
-
     inner = (-dist_mat) / (2 * (sigmas ** 2))
     numers = torch.exp(inner)
     denoms = torch.sum(numers, dim=1) - torch.diag(numers) #不採計自己的距離
@@ -128,7 +126,7 @@ def all_sym_affinities(data, perp, tol, attempts=100):
     return P
 
 
-def low_dim_affinities(Y, Y_dist_mat):
+def low_dim_affinities(Y_dist_mat):
     """
     computes the low dimensional affinities matrix Q
     Parameters:
@@ -139,31 +137,36 @@ def low_dim_affinities(Y, Y_dist_mat):
     Q: Symmetric low dimensional affinities matrix of shape (n_samples, n_samples)
 
     """
+    
     numers = (1 + Y_dist_mat) ** (-1)
     denom = torch.sum(numers) - torch.sum(torch.diag(numers))
     denom += EPSILON  # Avoid div/0
     Q = numers / denom
     Q = Q.fill_diagonal_(0.0)
-    return Q
+    return Q[None,:,:]
 
-
-def compute_grad(P, Q, Y, Y_dist_mat):
+def low_dim_affinities_3D( Y_dist_mat):
     """
-    computes the gradient vector needed to update the Y values
+    computes the low dimensional affinities matrix Q
     Parameters:
-    P: Symmetric affinities matrix of shape (n_samples, n_samples)
-    Q: Symmetric low dimensional affinities matrix of shape (n_samples, n_samples)
     Y : low dimensional representation of the data, ndarray of shape (n_samples, n_components)
     Y_dist_mat : Y distance matrix; ndarray of shape (n_samples, n_samples)
 
     Returns:
-    grad: the gradient vector, shape (n_samples, n_components)
+    Q: Symmetric low dimensional affinities matrix of shape (n_samples, n_samples)
 
     """
-    Ydiff = Y[:, None, :] - Y[None, :, :]
-    pq_factor = (P - Q)[:, :, None]
-    dist_factor = ((1 + Y_dist_mat) ** (-1))[:, :, None]
-    return torch.sum(4 * pq_factor * Ydiff * dist_factor, axis=1)
+    Q = list(map(low_dim_affinities, Y_dist_mat))
+    Q = torch.cat(Q)
+    return Q
+
+
+def calculate_returns(rewards, gamma=0):
+    result = torch.empty_like(rewards)
+    result[-1] = rewards[-1]
+    for t in range(len(rewards)-2, -1, -1):
+        result[t] = rewards[t] + gamma*result[t+1]
+    return result
 
 def rl_tsne(
     data,
@@ -173,13 +176,12 @@ def rl_tsne(
     n_iter,
     lr,
     perp_tol=1e-8,
-    early_exaggeration=4.0,
-    pbar=False,
-    random_state=None,
     split_num=1,
     seed=0,
     save_video=False,
-    exp_decay=1,
+    epochs=1,
+    device_id=9,
+    batch_size=8,
 ):
     """calculates the pairwise affinities p_{j|i} using the given values of sigma
 
@@ -200,72 +202,106 @@ def rl_tsne(
     Y: low dimensional representation of the data, ndarray of shape (n_samples, n_components)
 
     """
+    # Set all tensors to the first CUDA device
+
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     
+    # Y: 低維資料
+    # P: 高維資料 symmetric affinities matrix
+    # Q: 低維資料 symmetric affinities matrix
+    
     data = torch.tensor(data)
-    P = all_sym_affinities(data, perp, perp_tol) * early_exaggeration
-    P = torch.clip(P, EPSILON, None)
-
+    P = all_sym_affinities(data, perp, perp_tol)
+    P = torch.clip(P, EPSILON, None).cuda(device_id)
+    data = data.cuda(device_id)
+    
     init_mean = np.zeros(n_components)
     init_cov = np.identity(n_components) * 1e-4
 
-    Y = np.random.multivariate_normal(mean=init_mean, cov=init_cov, size=data.shape[0])
-    Y = torch.tensor(Y)
-    
-    iter_range = range(n_iter)
-    if pbar:
-        iter_range = tqdm(iter_range, "Iterations")
-    if save_video:
-        videowrite = cv2.VideoWriter('results/result.mp4',cv2.VideoWriter_fourcc(*'mp4v'),20,(640,480))
-    
+    agent = DiagonalGaussianPolicy(N=data.shape[0], low_dim=n_components, high_dim=data.shape[1], lr=lr, device_id=device_id)
     cur_time = str(datetime.now())[:-7]
     writer = SummaryWriter(log_dir="logs/"+cur_time)
     
-    data_size = data.shape[0]
-    split_data_size = int(np.ceil(data_size/split_num))
-    min_loss = np.inf
+    low_size = n_components*data.shape[0]
+    high_size = data.reshape(-1).shape[0]
+    states = torch.empty((n_iter, batch_size, low_size+high_size)).cuda(device_id).double()
+    actions = torch.empty((n_iter, batch_size, low_size)).cuda(device_id).double()
+    rewards = torch.empty((n_iter, batch_size, 1)).cuda(device_id).double()
+    max_reward = -np.inf
+    best_Y, best_init_Y = None, None
     
-    for t in iter_range:
-        data_order = np.arange(data_size)
-        np.random.shuffle(data_order)
-        for i in range(split_num):
-            start_idx, end_idx = i*split_data_size, (i+1)*split_data_size
-            cur_Y = Y[data_order[start_idx:end_idx]]
-            cur_P = P[data_order[start_idx:end_idx]]
-            cur_P = cur_P[:, data_order[start_idx:end_idx]]
+    for epoch in range(epochs):
+        
+        Y = np.random.multivariate_normal(mean=init_mean, cov=init_cov, size=(batch_size, data.shape[0]))
+        init_Y = Y = torch.tensor(Y).cuda(device_id)
+        origin_low_shape = Y.shape
+        Y_dist_mat = squared_dist_mat(Y)
+        Q = low_dim_affinities_3D(Y_dist_mat)
+        Q = torch.clip(Q, EPSILON, None)
+        prev_KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q)), -1), -1)
 
-            Y_dist_mat = squared_dist_mat(cur_Y)
-            Q = low_dim_affinities(cur_Y, Y_dist_mat)
+        for t in range(n_iter):
+            low_dim_data = Y.reshape(batch_size, -1)
+            high_dim_data = data.reshape(1, -1).repeat(batch_size, 1)
+            s_t = torch.cat((low_dim_data, high_dim_data), dim=-1)
+            
+            a_t = agent.act(s_t)
+            Y = a_t.reshape(origin_low_shape) + Y
+            
+            Y_dist_mat = squared_dist_mat(Y)
+            Q = low_dim_affinities_3D(Y_dist_mat).cuda(device_id)
             Q = torch.clip(Q, EPSILON, None)
 
-            grad = compute_grad(cur_P, Q, cur_Y, Y_dist_mat)*((exp_decay)**(t-500))
-            Y[data_order[start_idx:end_idx]] = cur_Y - lr * grad
+            cur_KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q)), -1), -1)
+            r_t = prev_KL_div - cur_KL_div
+            states[t] = s_t
+            actions[t] = a_t
+            r_t.requires_grad = False
+            rewards[t] = r_t.reshape(batch_size, 1)
+    
+            prev_KL_div = cur_KL_div
         
-        Y_dist_mat = squared_dist_mat(Y)
-        Q = low_dim_affinities(Y, Y_dist_mat)
-        Q = torch.clip(Q, EPSILON, None)
-        loss = torch.sum(P * (torch.log(P) - torch.log(Q)))
-        writer.add_scalar("Loss", loss, t + 1)
-        if loss < min_loss:
-            min_loss = loss
-        if t == 100:
-            P = P / early_exaggeration
-
-        if save_video:
-            fig, ax = plt.subplots()
-            scatter  = ax.scatter(Y[:,0], Y[:,1], c=data_label, cmap=plt.get_cmap('turbo'))
-            # Shrink current axis by 20%
-            box = ax.get_position()
-            ax.set_position([box.x0, box.y0, box.width * 0.95, box.height])
-            legend1 = ax.legend(*scatter.legend_elements(),
-                        loc="center left", title="Classes", bbox_to_anchor=(1, 0.5))
-            ax.add_artist(legend1)
-            plt.savefig("results/t.png")
+        returns = calculate_returns(rewards).cuda(device_id)
+        agent.learn(states, actions, returns)
+        total_reward = torch.sum(rewards)
+        writer.add_scalar("reward", total_reward, epoch + 1)
+        print(f"epoch:{epoch}, mean reward:{total_reward/batch_size}")
+        if total_reward > max_reward:
+            max_reward = total_reward
+            best_Y, best_init_Y = Y, init_Y
+            torch.save(agent.mu.state_dict(), "model.pkl")
+            print("save model")
+            
+    if save_video:
+        videowrite = cv2.VideoWriter('results/result.mp4',cv2.VideoWriter_fourcc(*'mp4v'),20,(640,480))
+        Y = np.random.multivariate_normal(mean=init_mean, cov=init_cov, size=data.shape[0])
+        Y = torch.tensor(Y).cuda(device_id)
+        origin_low_shape = Y.shape
+        for t in range(n_iter):
+            low_dim_data = Y.reshape(1, -1)
+            high_dim_data = data.reshape(1, -1)
+            s_t = torch.cat((low_dim_data, high_dim_data), dim=1).cuda(device_id)
+            a_t = agent.act(s_t)
+            Y = a_t.reshape(origin_low_shape) + Y
+            save_tsne_result(Y, data_label, "results/t.png")
             img = cv2.imread("results/t.png")
             videowrite.write(img)
-            plt.close()
-    print("min_loss:", min_loss)
-    return Y
+            
+    return best_Y.detach().cpu().numpy()
+
+def save_tsne_result(low_dim, digit_class, fig_dir):
+    fig, ax = plt.subplots()
+    scatter  = ax.scatter(low_dim[:,0], low_dim[:,1], c=digit_class,)# cmap=plt.get_cmap('turbo'))
+    # Shrink current axis by 20%
+    box = ax.get_position()
+    ax.set_position([box.x0, box.y0, box.width * 0.95, box.height])
+    legend1 = ax.legend(*scatter.legend_elements(),
+                loc="center left", title="Classes", bbox_to_anchor=(1, 0.5))
+    ax.add_artist(legend1)
+    plt.ylim(-60, 60)
+    plt.xlim(-60, 60)
+    plt.savefig(fig_dir)
+    plt.close()

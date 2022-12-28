@@ -7,32 +7,40 @@ output_dim: Tuple(timestamp, features)
 '''
 class Network(nn.Module):
     
-    def __init__(self, input_dim, output_dim, hidden_dim = [100, 60, 40]):
+    def __init__(self,  N, low_dim, high_dim, hidden_dim=[10, 8, 6]):
         super(Network, self).__init__()
-        self.output_dim = output_dim
-        self.linear1 = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim[0]),
+        self.N = N
+        self.low_dim = low_dim
+        self.high_dim = high_dim
+        self.low_dim_linear = nn.Sequential(
+            nn.Linear(N*low_dim, hidden_dim[0]),
             nn.PReLU(),
-        )
-        self.linear2 = nn.Sequential(
             nn.Linear(hidden_dim[0], hidden_dim[1]),
             nn.PReLU(),
         )
-        self.linear3 = nn.Sequential(
-            nn.Linear(hidden_dim[1], hidden_dim[2]),
+        self.high_dim_linear = nn.Sequential(
+            nn.Linear(N*high_dim, hidden_dim[0]),
+            nn.PReLU(),
+            nn.Linear(hidden_dim[0], hidden_dim[1]),
             nn.PReLU(),
         )
-        self.linear4 = nn.Sequential(
-            nn.Linear(hidden_dim[2], self.output_dim),
+        self.linear = nn.Sequential(
+            nn.Linear(2*hidden_dim[1], hidden_dim[2]),
             nn.PReLU(),
+            nn.Linear(hidden_dim[2], N*low_dim),
+            nn.Tanh(),
         )
-        self.residual_linear1 = nn.Linear(input_dim, hidden_dim[1])
-        self.residual_linear2 = nn.Linear(input_dim, hidden_dim[2])
         
-    def forward(self, in_data):
-        hidden = self.linear1(in_data)
-        hidden = self.linear2(hidden)
-        hidden = self.linear3(hidden)
-        out = self.linear4(hidden)
-
+    def forward(self, data):
+        
+        if len(data.shape) ==2:
+            low_dim_data = data[:,:self.N*self.low_dim]
+            high_dim_data = data[:,self.N*self.low_dim:]
+        elif len(data.shape) == 3:
+            low_dim_data = data[:, :,:self.N*self.low_dim]
+            high_dim_data = data[:, :,self.N*self.low_dim:]
+        low_hidden = self.low_dim_linear(low_dim_data)
+        high_hidden = self.high_dim_linear(high_dim_data)
+        hidden = torch.cat((low_hidden, high_hidden), dim=-1)
+        out = self.linear(hidden)
         return out
