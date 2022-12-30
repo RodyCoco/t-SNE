@@ -161,7 +161,7 @@ def low_dim_affinities_3D( Y_dist_mat):
     return Q
 
 
-def calculate_returns(rewards, gamma=0):
+def calculate_returns(rewards, gamma=0.9):
     result = torch.empty_like(rewards)
     result[-1] = rewards[-1]
     for t in range(len(rewards)-2, -1, -1):
@@ -169,6 +169,7 @@ def calculate_returns(rewards, gamma=0):
     return result
 
 def rl_tsne(
+    hidden_dim,
     data,
     data_label,
     n_components,
@@ -178,6 +179,7 @@ def rl_tsne(
     perp_tol=1e-8,
     split_num=1,
     seed=0,
+    gamma=0,
     save_video=False,
     epochs=1,
     device_id=9,
@@ -221,7 +223,7 @@ def rl_tsne(
     init_mean = np.zeros(n_components)
     init_cov = np.identity(n_components) * 1e-4
 
-    agent = DiagonalGaussianPolicy(N=data.shape[0], low_dim=n_components, high_dim=data.shape[1], lr=lr, device_id=device_id)
+    agent = DiagonalGaussianPolicy(N=data.shape[0], low_dim=n_components, high_dim=data.shape[1], lr=lr, device_id=device_id, hidden_dim=hidden_dim)
     cur_time = str(datetime.now())[:-7]
     writer = SummaryWriter(log_dir="logs/"+cur_time)
     
@@ -242,7 +244,6 @@ def rl_tsne(
         Q = low_dim_affinities_3D(Y_dist_mat)
         Q = torch.clip(Q, EPSILON, None)
         prev_KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q)), -1), -1)
-
         for t in range(n_iter):
             low_dim_data = Y.reshape(batch_size, -1)
             high_dim_data = data.reshape(1, -1).repeat(batch_size, 1)
@@ -264,15 +265,16 @@ def rl_tsne(
     
             prev_KL_div = cur_KL_div
         
-        returns = calculate_returns(rewards).cuda(device_id)
+        returns = calculate_returns(rewards, gamma=gamma).cuda(device_id)
         agent.learn(states, actions, returns)
         total_reward = torch.sum(rewards)
-        writer.add_scalar("reward", total_reward, epoch + 1)
-        print(f"epoch:{epoch}, mean reward:{total_reward/batch_size}")
+        writer.add_scalar("mean total reward", total_reward/batch_size, epoch + 1)
+        print(f"epoch:{epoch}, mean total reward:{total_reward/batch_size}")
         if total_reward > max_reward:
             max_reward = total_reward
-            best_Y, best_init_Y = Y, init_Y
-            torch.save(agent.mu.state_dict(), "model.pkl")
+            import copy
+            best_Y, best_init_Y, best_agent = Y, init_Y, copy.deepcopy(agent)
+            torch.save(agent.policy.state_dict(), "model.pkl")
             print("save model")
             
     if save_video:
@@ -286,11 +288,11 @@ def rl_tsne(
             s_t = torch.cat((low_dim_data, high_dim_data), dim=1).cuda(device_id)
             a_t = agent.act(s_t)
             Y = a_t.reshape(origin_low_shape) + Y
-            save_tsne_result(Y, data_label, "results/t.png")
+            save_tsne_result(Y.detach().cpu().numpy(), data_label, "results/t.png")
             img = cv2.imread("results/t.png")
             videowrite.write(img)
             
-    return best_Y.detach().cpu().numpy()
+    return best_Y.detach().cpu().numpy(), P, best_agent
 
 def save_tsne_result(low_dim, digit_class, fig_dir):
     fig, ax = plt.subplots()
@@ -301,7 +303,5 @@ def save_tsne_result(low_dim, digit_class, fig_dir):
     legend1 = ax.legend(*scatter.legend_elements(),
                 loc="center left", title="Classes", bbox_to_anchor=(1, 0.5))
     ax.add_artist(legend1)
-    plt.ylim(-60, 60)
-    plt.xlim(-60, 60)
     plt.savefig(fig_dir)
     plt.close()

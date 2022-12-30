@@ -5,13 +5,19 @@ from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 
 digits = np.array([
-    [1,1,1],
-    [1,1,2],
-    [3,4,7],
-    [3,4,8],
-]) 
+    [1, 0, 0, 0 ,0],
+    [0.9, 0, 0, 0 ,0],
+    [0, 1, 0, 0 ,0],
+    [0, 0.9, 0, 0 ,0],
+    [0, 0, 1, 0 ,0],
+    [0, 0, 0.9, 0 ,0],
+    [0, 0, 0, 1 ,0],
+    [0, 0, 0, 0.9 ,0],
+    [0, 0, 0, 0 ,1],
+    [0, 0, 0, 0 ,0.9],
+]).astype(np.float64)
 
-digit_class = np.array([1,1,2,2])
+digit_class = np.array([1,1,2,2,3,3,4,4,5,5])
 
 low_dim = split_tsne(
     data_label=digit_class,
