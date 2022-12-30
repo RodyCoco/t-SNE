@@ -12,6 +12,9 @@ class Network(nn.Module):
         self.N = N
         self.low_dim = low_dim
         self.high_dim = high_dim
+        self.sigma = nn.Parameter(torch.ones(N*low_dim))
+        self.sigma.requires_grad = False
+        
         self.low_dim_linear = nn.Sequential(
             nn.Linear(N*low_dim, hidden_dim[0]),
             nn.PReLU(),
@@ -28,8 +31,9 @@ class Network(nn.Module):
             nn.Linear(2*hidden_dim[1], hidden_dim[2]),
             nn.PReLU(),
             nn.Linear(hidden_dim[2], N*low_dim),
-            nn.Tanh(),
+            nn.Sigmoid(),
         )
+        
         
     def forward(self, data):
         
@@ -43,4 +47,5 @@ class Network(nn.Module):
         high_hidden = self.high_dim_linear(high_dim_data)
         hidden = torch.cat((low_hidden, high_hidden), dim=-1)
         out = self.linear(hidden)
+        out = (out-0.5)*2 # range:0~1 -> -1~1
         return out

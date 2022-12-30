@@ -46,20 +46,16 @@ class DiagonalGaussianPolicy(Policy):
         lr (float): learning rate
         '''
         from linear import Network
-        self.mu = Network(N, low_dim, high_dim, hidden_dim).double().cuda(device_id)
-
-        self.log_sigma = torch.ones(N*low_dim, dtype=torch.double).cuda(device_id) # requires_grad=False)#*0.001
-        self.log_sigma.requires_grad = False
-        
-        self.opt = torch.optim.Adam(list(self.mu.parameters()) + [self.log_sigma], lr=lr)
+        self.policy = Network(N, low_dim, high_dim, hidden_dim).double().cuda(device_id)
+        self.opt = torch.optim.Adam(list(self.policy.parameters()), lr=lr)
 
     def pi(self, s_t):
         '''
         returns the probability distribution over actions
         s_t (np.ndarray): the current state
         '''
-        mu = self.mu(s_t)
-        # sigma = torch.exp(self.log_sigma)
-        sigma = self.log_sigma
+        mu = self.policy(s_t)
+        # sigma = torch.exp(self.policy.sigma)
+        sigma = self.policy.sigma
         pi = torch.distributions.MultivariateNormal(mu, torch.diag(sigma))
         return pi
