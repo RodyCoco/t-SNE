@@ -1,15 +1,13 @@
-from RL_tsne import rl_tsne, save_tsne_result, low_dim_affinities_3D, squared_dist_mat, EPSILON
-from sklearn.datasets import load_digits
-import matplotlib.pyplot as plt
-from torch.utils.tensorboard import SummaryWriter
 import torch
-from linear import Network
 import numpy as np
+from utils import rl_tsne
+from sklearn.datasets import load_digits
+from torch.utils.tensorboard import SummaryWriter
+from setting import my_args
 
-seed = 0
-torch.manual_seed(seed)
-torch.cuda.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)
+torch.manual_seed(my_args.seed)
+torch.cuda.manual_seed(my_args.seed)
+torch.cuda.manual_seed_all(my_args.seed)
 
 digits, digit_class = load_digits(return_X_y=True)
 digit_class = digit_class[:50]
@@ -27,25 +25,19 @@ digits = np.array([
     [0, 0, 0, 0 ,1],
     [0, 0, 0, 0 ,0.9],
 ]).astype(np.float64)
-
 digit_class = np.array([1,1,2,2,3,3,4,4,5,5])
 
-n_components = 2
-steps = 50
-device_id = 7
-
-low_dim, P, agent = rl_tsne(
-    hidden_dim = [20,10,5],
+low_dim = rl_tsne(
+    hidden_dim = my_args.hidden_dim, # hidden dim for agent
     data_label=digit_class,
     data=digits, # Data is mxn numpy array, each row a point
-    n_components=n_components, # Number of dim to embed to
-    perp=2, # Perplexity (higher for more spread out data)
-    steps=50, # Iterations to run t-SNE for
-    lr=2e-3, # Learning rate
-    split_num=1,
-    epochs=200,
-    batch_size=64,
-    save_video=True,
-    device_id=device_id,
-    gamma=0,
+    n_components=my_args.n_components, # Number of dim to embed to
+    perp=my_args.perplexity, # Perplexity (higher for more spread out data)
+    perp_tol=my_args.perp_tol,
+    steps=my_args.steps, # Iterations to run t-SNE for
+    lr=my_args.lr, # Learning rate
+    episodes=my_args.episodes,
+    env_num=my_args.env_num,
+    device_id=my_args.device_id,
+    gamma=my_args.gamma, # Discounted factor
 )
