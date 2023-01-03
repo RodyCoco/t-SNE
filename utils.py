@@ -82,7 +82,7 @@ def low_dim_affinities_3D( Y_dist_mat):
     return Q
 
 
-def calculate_returns(rewards, gamma=0.9):
+def calculate_returns(rewards, gamma):
     result = torch.empty_like(rewards)
     result[-1] = rewards[-1]
     for t in range(len(rewards)-2, -1, -1):
@@ -142,7 +142,8 @@ def rl_tsne(
     
     for episode in range(episodes):
         
-        Y = np.random.multivariate_normal(mean=init_mean, cov=init_cov, size=(env_num, data.shape[0]))
+        # Y = np.random.multivariate_normal(mean=init_mean, cov=init_cov, size=(env_num, data.shape[0]))
+        Y =  np.random.uniform(-1, 1, size=(env_num, data.shape[0], n_components))
         Y = torch.tensor(Y).cuda(device_id)
         origin_low_shape = Y.shape
         Y_dist_mat = squared_dist_mat(Y)
