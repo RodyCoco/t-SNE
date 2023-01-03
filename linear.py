@@ -12,7 +12,7 @@ class Network(nn.Module):
         self.N = N
         self.low_dim = low_dim
         self.high_dim = high_dim
-        self.sigma = nn.Parameter(torch.ones(N*low_dim))
+        self.sigma = nn.Parameter(torch.ones(N*low_dim)*0.01)
         self.sigma.requires_grad = False
         
         self.low_dim_linear = nn.Sequential(
