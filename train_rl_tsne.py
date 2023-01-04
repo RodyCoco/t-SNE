@@ -13,19 +13,19 @@ digits, digit_class = load_digits(return_X_y=True)
 digit_class = digit_class[:50]
 digits = digits[:50]
 
-digits = np.array([
-    [1, 0, 0, 0 ,0],
-    [0.9, 0, 0, 0 ,0],
-    [0, 1, 0, 0 ,0],
-    [0, 0.9, 0, 0 ,0],
-    [0, 0, 1, 0 ,0],
-    [0, 0, 0.9, 0 ,0],
-    [0, 0, 0, 1 ,0],
-    [0, 0, 0, 0.9 ,0],
-    [0, 0, 0, 0 ,1],
-    [0, 0, 0, 0 ,0.9],
-]).astype(np.float64)
-digit_class = np.array([1,1,2,2,3,3,4,4,5,5])
+# digits = np.array([
+#     [1, 0, 0, 0 ,0],
+#     [0.9, 0, 0, 0 ,0],
+#     [0, 1, 0, 0 ,0],
+#     [0, 0.9, 0, 0 ,0],
+#     [0, 0, 1, 0 ,0],
+#     [0, 0, 0.9, 0 ,0],
+#     [0, 0, 0, 1 ,0],
+#     [0, 0, 0, 0.9 ,0],
+#     [0, 0, 0, 0 ,1],
+#     [0, 0, 0, 0 ,0.9],
+# ]).astype(np.float64)
+# digit_class = np.array([1,1,2,2,3,3,4,4,5,5])
 
 low_dim = rl_tsne(
     hidden_dim = my_args.hidden_dim, # hidden dim for agent
