@@ -7,13 +7,13 @@ output_dim: Tuple(timestamp, features)
 '''
 class Network(nn.Module):
     
-    def __init__(self,  N, low_dim, high_dim, hidden_dim=[10, 8, 6]):
+    def __init__(self,  N, low_dim, high_dim, hidden_dim=[10, 8, 6], var=1e-2):
         super(Network, self).__init__()
         self.N = N
         self.low_dim = low_dim
         self.high_dim = high_dim
-        self.sigma = nn.Parameter(torch.ones(N*low_dim)*0.01)
-        self.sigma.requires_grad = False
+        self.var = nn.Parameter(torch.ones(N*low_dim)*var)
+        self.var.requires_grad = False
         
         self.low_dim_linear = nn.Sequential(
             nn.Linear(N*low_dim, hidden_dim[0]),
