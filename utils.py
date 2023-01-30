@@ -172,6 +172,8 @@ def rl_tsne(
             prev_KL_div = cur_KL_div
             
         returns = calculate_returns(rewards, gamma=gamma).cuda(device_id)
+        # reward normalization
+        returns = (returns - torch.mean(returns)) / (torch.std(returns) + 1e-10)
         agent.learn(states, actions, returns)
         total_reward = torch.sum(rewards)
         writer.add_scalar("mean total reward", total_reward/env_num, episode + 1)
