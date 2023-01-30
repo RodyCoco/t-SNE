@@ -3,7 +3,7 @@ class my_args():
     steps = 100
     episodes = 1000
     device_id = 7
-    perplexity = 2
+    perplexity = 30
     lr = 1e-4
     env_num = 64
     gamma = 0.5
