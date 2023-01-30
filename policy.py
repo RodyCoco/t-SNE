@@ -55,6 +55,6 @@ class DiagonalGaussianPolicy(Policy):
         s_t (np.ndarray): the current state
         '''
         mu = self.policy(s_t)
-        var = self.policy.var
+        var = torch.exp(self.policy.var)
         pi = torch.distributions.MultivariateNormal(mu, torch.diag(var))
         return pi
