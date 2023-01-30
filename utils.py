@@ -140,6 +140,16 @@ def rl_tsne(
     max_reward = -np.inf
     best_Y = None
     
+    # calculate origin tSNE baseline
+    from sklearn.manifold import TSNE
+    tsne = TSNE(n_components=2, random_state=0, learning_rate="auto", verbose=2, perplexity=perp)
+    Y = tsne.fit_transform(data.cpu().numpy())
+    Y = torch.tensor(Y).cuda(device_id)
+    Y_dist_mat = squared_dist_mat(Y)
+    Q = low_dim_affinities(Y_dist_mat)
+    Q = torch.clip(Q, EPSILON, None)
+    KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q)), -1), -1)
+    
     for episode in range(episodes):
         
         # Y = np.random.multivariate_normal(mean=init_mean, cov=init_cov, size=(env_num, data.shape[0]))
@@ -188,7 +198,7 @@ def rl_tsne(
 
 def save_tsne_result(low_dim, digit_class, fig_dir):
     fig, ax = plt.subplots()
-    scatter  = ax.scatter(low_dim[:,0], low_dim[:,1], c=digit_class,)# cmap=plt.get_cmap('turbo'))
+    scatter  = ax.scatter(low_dim[:,0], low_dim[:,1], c=digit_class, cmap=plt.get_cmap('turbo'))
     # Shrink current axis by 20%
     box = ax.get_position()
     ax.set_position([box.x0, box.y0, box.width * 0.95, box.height])
