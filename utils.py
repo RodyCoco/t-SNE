@@ -143,12 +143,12 @@ def rl_tsne(
     # calculate origin tSNE baseline
     from sklearn.manifold import TSNE
     tsne = TSNE(n_components=2, random_state=0, learning_rate="auto", verbose=2, perplexity=perp)
-    Y = tsne.fit_transform(data.cpu().numpy())
-    Y = torch.tensor(Y).cuda(device_id)
-    Y_dist_mat = squared_dist_mat(Y)
+    tsne_Y = tsne.fit_transform(data.cpu().numpy())
+    tsne_Y = torch.tensor(tsne_Y).cuda(device_id)
+    Y_dist_mat = squared_dist_mat(tsne_Y)
     Q = low_dim_affinities(Y_dist_mat)
     Q = torch.clip(Q, EPSILON, None)
-    KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q)), -1), -1)
+    tsne_KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q)), -1), -1)
     
     for episode in range(episodes):
         
@@ -187,7 +187,7 @@ def rl_tsne(
         agent.learn(states, actions, returns)
         total_reward = torch.sum(rewards)
         writer.add_scalar("mean total reward", total_reward/env_num, episode + 1)
-        print(f"Episode[{episode}/{episodes}], mean total reward:{total_reward/env_num:5f}")
+        print(f"Episode[{episode+1}/{episodes}], mean total reward:{total_reward/env_num:5f}")
         if total_reward > max_reward:
             max_reward = total_reward
             best_Y = Y
