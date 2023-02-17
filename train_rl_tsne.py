@@ -10,8 +10,8 @@ torch.cuda.manual_seed(my_args.seed)
 torch.cuda.manual_seed_all(my_args.seed)
 
 digits, digit_class = load_digits(return_X_y=True)
-digit_class = digit_class[:50]
-digits = digits[:50]
+digit_class = digit_class
+digits = digits
 
 low_dim = rl_tsne(
     hidden_dim = my_args.hidden_dim, # hidden dim for agent

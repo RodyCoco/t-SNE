@@ -7,6 +7,7 @@ import torch
 from policy import DiagonalGaussianPolicy, GNNPolicy
 from torch_geometric.data import Data
 EPSILON = 1e-12
+diags_mask = None
 
 def squared_dist_mat(X):
     
@@ -77,9 +78,15 @@ def low_dim_affinities(Y_dist_mat):
     Q = Q.fill_diagonal_(0.0)
     return Q[None,:,:]
 
-def low_dim_affinities_3D( Y_dist_mat):
-    Q = list(map(low_dim_affinities, Y_dist_mat))
-    Q = torch.cat(Q)
+def low_dim_affinities_3D(Y_dist_mat):
+    bacth_size, data_size, _ = Y_dist_mat.shape
+    numers = (1 + Y_dist_mat) ** (-1) # B,data_size,data_size
+    diags = numers * diags_mask # B,data_size,data_size only diag
+    denom =  numers.flatten(start_dim=1).sum(dim=1) - diags.flatten(start_dim=1).sum(dim=1) #B,1
+    denom += EPSILON  # Avoid div/0
+    denom = denom.reshape(bacth_size, 1, 1).repeat(1, data_size, data_size)
+    Q = numers / denom
+    Q = Q * (1-diags_mask)
     return Q
 
 
@@ -104,6 +111,7 @@ def rl_tsne(
     episodes=1,
     device_id=9,
     env_num=8,
+    N=50
 ):  
     video_dir = "plots/video"
     figure_dir = "plots/figure"
@@ -122,15 +130,12 @@ def rl_tsne(
     # Q: 低維資料 symmetric affinities matrix
     
     data = torch.tensor(data)
-    P = all_sym_affinities(data, perp, perp_tol)
-    P = torch.clip(P, EPSILON, None).cuda(device_id)
-    data = data.cuda(device_id)
     
     init_mean = np.zeros(n_components)
     init_cov = np.identity(n_components) * 1e-4
 
     agent = GNNPolicy(
-        var_dim = n_components*data.shape[0],
+        var_dim = n_components*N,
         layer_num=3,
         input_dim=data.shape[-1]+n_components,
         hidden_dim=[200, 100],
@@ -141,41 +146,50 @@ def rl_tsne(
     cur_time = str(datetime.now())[:-7]
     writer = SummaryWriter(log_dir="training_logs/"+cur_time)
     
-    low_size = n_components*data.shape[0]
-    high_size = data.reshape(-1).shape[0]
-    states_x = torch.empty((steps, env_num, data.shape[0], data.shape[1]+n_components)).cuda(device_id).double()
-    actions = torch.empty((steps, env_num, n_components*data.shape[0])).cuda(device_id).double()
+    states_x = torch.empty((steps, env_num, N, data.shape[1]+n_components)).cuda(device_id).double()
+    actions = torch.empty((steps, env_num, n_components*N)).cuda(device_id).double()
     rewards = torch.empty((steps, env_num, 1)).cuda(device_id).double()
     max_reward = -np.inf
     best_Y = None
     
-    D = squared_dist_mat(data)
     edge_index = torch.zeros((2, 2450)).long().cuda(device_id)
-    edge_attr = torch.zeros((2450, 1)).cuda(device_id)
-    idx = -1
-    for i in range(50):
-        for j in range(50):
-            if i == j: continue
-            idx+=1
-            edge_index[:,idx] = torch.tensor([i, j]).long()
-            edge_attr[idx,:] = torch.tensor([P[i,j]]).double()
-
+    
+    global diags_mask
+    diags_mask = torch.eye(N).repeat(env_num, 1, 1).cuda(device_id)
+    
     for episode in range(episodes):
-        # Y = np.random.multivariate_normal(mean=init_mean, cov=init_cov, size=(env_num, data.shape[0]))
-        Y =  np.random.uniform(-1, 1, size=(env_num, data.shape[0], n_components))
+        index = np.arange(data.shape[0])
+        np.random.shuffle(index)
+        cur_data = data[index[:N]]
+        Y =  np.random.uniform(-1, 1, size=(env_num, cur_data.shape[0], n_components))
         Y = torch.tensor(Y).cuda(device_id)
         origin_low_shape = Y.shape
         Y_dist_mat = squared_dist_mat(Y)
         Q = low_dim_affinities_3D(Y_dist_mat)
         Q = torch.clip(Q, EPSILON, None)
+        
+        P = all_sym_affinities(cur_data, perp, perp_tol)
+        P = torch.clip(P, EPSILON, None).cuda(device_id)
+        
+        for i in range(8):
+            prev_KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q[i])), -1), -1)
+            print(prev_KL_div)
         prev_KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q)), -1), -1)
-        t0 = datetime.now()
+        
+        edge_attr = torch.zeros((2450, 1)).cuda(device_id)
+        idx = -1
+        for i in range(N):
+            for j in range(N):
+                if i == j: continue
+                idx+=1
+                edge_index[:,idx] = torch.tensor([i, j]).long()
+                edge_attr[idx,:] = torch.tensor([P[i,j]]).double()
+        cur_data = cur_data[None,:].repeat(env_num, 1, 1).cuda(device_id)
+        
         for t in range(steps):
-
-            cur_data = data[None,:].repeat(env_num, 1, 1)
+            
             # Define graph components
             x = torch.cat((cur_data, Y), dim=-1) # shape: 資料數量x(低維size+高維size)
-            
             graph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr).cuda(device_id) 
 
             a_t = agent.act(graph)

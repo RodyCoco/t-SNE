@@ -19,8 +19,10 @@ for path in path_list:
         
 np.random.seed(my_args.seed)
 digits, digit_class = load_digits(return_X_y=True)
-data_label = digit_class[:50]
-data = digits[:50]
+index = np.arange(digits.shape[0])
+np.random.shuffle(index)
+data_label = digit_class[index[:50]]
+data = digits[index[:50]]
 
 agent = GNNPolicy(
         var_dim = my_args.n_components*data.shape[0],

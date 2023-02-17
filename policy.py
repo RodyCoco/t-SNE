@@ -76,8 +76,8 @@ class GNNPolicy(Policy):
             hidden_dim=hidden_dim,
             output_dim=output_dim
             ).double().cuda(device_id)
-        pytorch_total_params = sum(p.numel() for p in self.policy.parameters() if p.requires_grad)
-        input(pytorch_total_params)
+        # pytorch_total_params = sum(p.numel() for p in self.policy.parameters() if p.requires_grad)
+        # input(pytorch_total_params)
         self.opt = torch.optim.Adam(list(self.policy.parameters()), lr=lr)
 
     def pi(self, s_t):

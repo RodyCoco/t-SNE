@@ -1,7 +1,7 @@
 class my_args():
     n_components = 2
     steps = 100
-    episodes = 10000
+    episodes = 100000
     device_id = 1
     perplexity = 30
     lr = 1e-3
