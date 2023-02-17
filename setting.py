@@ -1,12 +1,12 @@
 class my_args():
     n_components = 2
     steps = 100
-    episodes = 1000
-    device_id = 7
+    episodes = 10000
+    device_id = 1
     perplexity = 30
-    lr = 1e-4
-    env_num = 64
+    lr = 1e-3
+    env_num = 8
     gamma = 0.5
     hidden_dim = [200,100,50]
-    seed = 0
+    seed = 1
     perp_tol=1e-8

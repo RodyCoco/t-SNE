@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 import torch
-from policy import DiagonalGaussianPolicy
+from policy import DiagonalGaussianPolicy, GNNPolicy
+from torch_geometric.data import Data
 EPSILON = 1e-12
 
 def squared_dist_mat(X):
@@ -128,30 +129,38 @@ def rl_tsne(
     init_mean = np.zeros(n_components)
     init_cov = np.identity(n_components) * 1e-4
 
-    agent = DiagonalGaussianPolicy(N=data.shape[0], low_dim=n_components, high_dim=data.shape[1], lr=lr, device_id=device_id, hidden_dim=hidden_dim)
+    agent = GNNPolicy(
+        var_dim = n_components*data.shape[0],
+        layer_num=3,
+        input_dim=data.shape[-1]+n_components,
+        hidden_dim=[200, 100],
+        output_dim=n_components,
+        lr=lr,
+        device_id=device_id,
+        )
     cur_time = str(datetime.now())[:-7]
     writer = SummaryWriter(log_dir="training_logs/"+cur_time)
     
     low_size = n_components*data.shape[0]
     high_size = data.reshape(-1).shape[0]
-    states = torch.empty((steps, env_num, low_size+high_size)).cuda(device_id).double()
-    actions = torch.empty((steps, env_num, low_size)).cuda(device_id).double()
+    states_x = torch.empty((steps, env_num, data.shape[0], data.shape[1]+n_components)).cuda(device_id).double()
+    actions = torch.empty((steps, env_num, n_components*data.shape[0])).cuda(device_id).double()
     rewards = torch.empty((steps, env_num, 1)).cuda(device_id).double()
     max_reward = -np.inf
     best_Y = None
     
-    # calculate origin tSNE baseline
-    from sklearn.manifold import TSNE
-    tsne = TSNE(n_components=2, random_state=0, learning_rate="auto", verbose=2, perplexity=perp)
-    tsne_Y = tsne.fit_transform(data.cpu().numpy())
-    tsne_Y = torch.tensor(tsne_Y).cuda(device_id)
-    Y_dist_mat = squared_dist_mat(tsne_Y)
-    Q = low_dim_affinities(Y_dist_mat)
-    Q = torch.clip(Q, EPSILON, None)
-    tsne_KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q)), -1), -1)
-    
+    D = squared_dist_mat(data)
+    edge_index = torch.zeros((2, 2450)).long().cuda(device_id)
+    edge_attr = torch.zeros((2450, 1)).cuda(device_id)
+    idx = -1
+    for i in range(50):
+        for j in range(50):
+            if i == j: continue
+            idx+=1
+            edge_index[:,idx] = torch.tensor([i, j]).long()
+            edge_attr[idx,:] = torch.tensor([P[i,j]]).double()
+
     for episode in range(episodes):
-        
         # Y = np.random.multivariate_normal(mean=init_mean, cov=init_cov, size=(env_num, data.shape[0]))
         Y =  np.random.uniform(-1, 1, size=(env_num, data.shape[0], n_components))
         Y = torch.tensor(Y).cuda(device_id)
@@ -160,13 +169,16 @@ def rl_tsne(
         Q = low_dim_affinities_3D(Y_dist_mat)
         Q = torch.clip(Q, EPSILON, None)
         prev_KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q)), -1), -1)
-        
+        t0 = datetime.now()
         for t in range(steps):
-            low_dim_data = Y.reshape(env_num, -1)
-            high_dim_data = data.reshape(1, -1).repeat(env_num, 1)
-            s_t = torch.cat((low_dim_data, high_dim_data), dim=-1)
+
+            cur_data = data[None,:].repeat(env_num, 1, 1)
+            # Define graph components
+            x = torch.cat((cur_data, Y), dim=-1) # shape: 資料數量x(低維size+高維size)
             
-            a_t = agent.act(s_t)
+            graph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr).cuda(device_id) 
+
+            a_t = agent.act(graph)
             Y = a_t.reshape(origin_low_shape) + Y
             
             Y_dist_mat = squared_dist_mat(Y)
@@ -175,16 +187,16 @@ def rl_tsne(
 
             cur_KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q)), -1), -1)
             r_t = prev_KL_div - cur_KL_div
-            states[t] = s_t
+            states_x[t] = graph.x
             actions[t] = a_t
             r_t.requires_grad = False
             rewards[t] = r_t.reshape(env_num, 1)
             prev_KL_div = cur_KL_div
-            
+
         returns = calculate_returns(rewards, gamma=gamma).cuda(device_id)
         # reward normalization
         returns = (returns - torch.mean(returns)) / (torch.std(returns) + 1e-10)
-        agent.learn(states, actions, returns)
+        agent.learn((states_x, edge_index, edge_attr), actions, returns)
         total_reward = torch.sum(rewards)
         writer.add_scalar("mean total reward", total_reward/env_num, episode + 1)
         print(f"Episode[{episode+1}/{episodes}], mean total reward:{total_reward/env_num:5f}")
@@ -193,7 +205,7 @@ def rl_tsne(
             best_Y = Y
             torch.save(agent.policy.state_dict(), "model.pkl")
             print("save model")
-            
+
     return best_Y.detach().cpu().numpy()
 
 def save_tsne_result(low_dim, digit_class, fig_dir):
