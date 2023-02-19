@@ -134,15 +134,17 @@ def rl_tsne(
     init_mean = np.zeros(n_components)
     init_cov = np.identity(n_components) * 1e-4
 
-    agent = GNNPolicy(
+    from GNN import myGNN
+    agent = myGNN(
         var_dim = n_components*N,
         layer_num=3,
         input_dim=data.shape[-1]+n_components,
-        hidden_dim=[200, 100],
+        hidden_dim=50,
         output_dim=n_components,
         lr=lr,
-        device_id=device_id,
-        )
+        ).cuda(device_id).double()
+    optimizer = torch.optim.Adam(list(agent.parameters()), lr=lr)
+     
     cur_time = str(datetime.now())[:-7]
     writer = SummaryWriter(log_dir="training_logs/"+cur_time)
     
@@ -159,7 +161,7 @@ def rl_tsne(
     
     for episode in range(episodes):
         index = np.arange(data.shape[0])
-        np.random.shuffle(index)
+        # np.random.shuffle(index)
         cur_data = data[index[:N]]
         Y =  np.random.uniform(-1, 1, size=(env_num, cur_data.shape[0], n_components))
         Y = torch.tensor(Y).cuda(device_id)
@@ -186,8 +188,12 @@ def rl_tsne(
             # Define graph components
             x = torch.cat((cur_data, Y), dim=-1) # shape: 資料數量x(低維size+高維size)
             graph = Data(x=x, edge_index=edge_index, edge_attr=edge_attr).cuda(device_id) 
-
-            a_t = agent.act(graph)
+            
+            mu = agent(graph.x, graph.edge_index)
+            batch_size, _, _ = mu.shape
+            mu = mu.reshape(batch_size, -1)
+            pi = torch.distributions.MultivariateNormal(mu, torch.diag(agent.var.exp()))
+            a_t = pi.sample()
             Y = a_t.reshape(origin_low_shape) + Y
             
             Y_dist_mat = squared_dist_mat(Y)
@@ -205,14 +211,31 @@ def rl_tsne(
         returns = calculate_returns(rewards, gamma=gamma).cuda(device_id)
         # reward normalization
         returns = (returns - torch.mean(returns)) / (torch.std(returns) + 1e-10)
-        agent.learn((states_x, edge_index, edge_attr), actions, returns)
+        
+        ################
+        # a, b = 8, 100
+        # states_x = states_x[:a,:b]
+        # actions = actions[:a,:b]
+        # returns = returns[:a,:b]
+        mu = agent(states_x, edge_index)
+        steps_size, batch_size, _, _ = mu.shape
+        mu = mu.reshape(steps_size, batch_size, -1)
+        pi = torch.distributions.MultivariateNormal(mu, torch.diag(agent.var.exp()))
+        log_prob = pi.log_prob(actions)
+        loss = torch.mean(-log_prob*returns[:, :, 0])
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        ################
+        print(torch.cuda.memory_summary(1))
+        input()
         total_reward = torch.sum(rewards)
         writer.add_scalar("mean total reward", total_reward/env_num, episode + 1)
         print(f"Episode[{episode+1}/{episodes}], mean total reward:{total_reward/env_num:5f}")
         if total_reward > max_reward:
             max_reward = total_reward
             best_Y = Y
-            torch.save(agent.policy.state_dict(), "model.pkl")
+            torch.save(agent.state_dict(), "model.pkl")
             print("save model")
 
     return best_Y.detach().cpu().numpy()
