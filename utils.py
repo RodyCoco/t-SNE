@@ -167,13 +167,8 @@ def rl_tsne(
         Y_dist_mat = squared_dist_mat(Y)
         Q = low_dim_affinities_3D(Y_dist_mat)
         Q = torch.clip(Q, EPSILON, None)
-        
         P = all_sym_affinities(cur_data, perp, perp_tol)
         P = torch.clip(P, EPSILON, None).cuda(device_id)
-        
-        for i in range(8):
-            prev_KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q[i])), -1), -1)
-            print(prev_KL_div)
         prev_KL_div = torch.sum(torch.sum(P * (torch.log(P) - torch.log(Q)), -1), -1)
         
         edge_attr = torch.zeros((2450, 1)).cuda(device_id)
